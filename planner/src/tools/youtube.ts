@@ -1,148 +1,155 @@
 import { z } from "zod";
-import { YoutubeTranscript } from "youtube-transcript";
-import type { YouTubeTranscriptItem } from "../utils/types.js";
+import Groq from "groq-sdk";
 
-export const youtubeSchema = z.object({
-  topic: z.string().min(3).describe("Topic to search for YouTube videos"),
-  maxVideos: z.number().min(1).max(5).default(3).describe("Maximum number of videos to analyze")
-});
+export const youtubeSchema = z
+  .object({
+    // Provide either a topic (to search) or a direct URL (single video)
+    topic: z.string().min(3).optional().describe("Search topic"),
+    url: z.string().url().optional().describe("Direct YouTube video URL"),
+    maxVideos: z.number().min(1).max(5).default(3).describe("Videos to analyze for a topic search")
+  })
+  .refine(v => v.topic || v.url, { message: "Provide either topic or url" });
 
-interface YouTubeSearchResult {
-  id: { videoId: string };
-  snippet: {
-    title: string;
-    description: string;
-    channelTitle: string;
-    publishedAt: string;
-  };
-}
-
-interface YouTubeVideoSummary {
-  videoId: string;
-  title: string;
-  channelTitle: string;
-  publishedAt: string;
-  url: string;
-  summary: string;
-  transcriptLength: number;
-}
-
-export async function youtubeResearch({ topic, maxVideos }: z.infer<typeof youtubeSchema>) {
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) {
-    return { 
-      videos: [], 
-      error: "Missing YOUTUBE_API_KEY. Please set it in your environment variables." 
-    };
-  }
-
-  try {
-    // Search for videos by topic
-    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(topic)}&maxResults=${maxVideos}&key=${apiKey}`;
-    const searchResponse = await fetch(searchUrl);
-    
-    if (!searchResponse.ok) {
-      throw new Error(`YouTube API error: ${searchResponse.status} ${searchResponse.statusText}`);
-    }
-    
-    const searchData = await searchResponse.json();
-    const videos: YouTubeSearchResult[] = searchData.items || [];
-    
-    if (videos.length === 0) {
-      return { videos: [], error: `No videos found for topic: "${topic}"` };
-    }
-
-    // Process each video
-    const videoSummaries: YouTubeVideoSummary[] = [];
-    
-    for (const video of videos) {
-      const videoId = video.id.videoId;
-      const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-      
-      try {
-        // Extract transcript
-        const transcript = await YoutubeTranscript.fetchTranscript(videoUrl) as YouTubeTranscriptItem[];
-        
-        if (!transcript || transcript.length === 0) {
-          videoSummaries.push({
+export async function youtubeResearch(input: z.infer<typeof youtubeSchema>) {
+  // URL mode: summarize a single video by metadata → Groq
+  if (input.url) {
+    try {
+      const videoId = new URL(input.url).searchParams.get("v") || "";
+      const meta = await fetchBasicYouTubeMetadata(input.url);
+      const summary = await summarizeWithGroqFromMetadata(meta.title, meta.description, input.url);
+      return {
+        videos: [
+          {
             videoId,
-            title: video.snippet.title,
-            channelTitle: video.snippet.channelTitle,
-            publishedAt: video.snippet.publishedAt,
-            url: videoUrl,
-            summary: "No transcript available for this video.",
+            title: meta.title || "(title unknown)",
+            channelTitle: meta.channelTitle || "(channel unknown)",
+            publishedAt: meta.publishedAt || "",
+            url: input.url,
+            summary,
             transcriptLength: 0
-          });
-          continue;
-        }
+          }
+        ]
+      };
+    } catch (err: any) {
+      return { videos: [], error: `Failed to summarize via Groq: ${err?.message || String(err)}` };
+    }
+  }
 
-        // Create summary from transcript
-        const fullText = transcript.map(t => t.text).join(" ");
-        const summary = createSummary(fullText, video.snippet.title);
-        
-        videoSummaries.push({
-          videoId,
-          title: video.snippet.title,
-          channelTitle: video.snippet.channelTitle,
-          publishedAt: video.snippet.publishedAt,
-          url: videoUrl,
-          summary,
-          transcriptLength: fullText.length
-        });
-        
-      } catch (transcriptError: any) {
-        videoSummaries.push({
-          videoId,
-          title: video.snippet.title,
-          channelTitle: video.snippet.channelTitle,
-          publishedAt: video.snippet.publishedAt,
-          url: videoUrl,
-          summary: `Failed to extract transcript: ${transcriptError?.message || "Unknown error"}`,
-          transcriptLength: 0
-        });
-      }
+  // Topic mode: search videos, then summarize each by metadata → Groq
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) return { videos: [], error: "Missing YOUTUBE_API_KEY. Please set it." };
+
+  const topic = input.topic as string;
+  const maxVideos = input.maxVideos ?? 3;
+  try {
+    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(
+      topic
+    )}&maxResults=${maxVideos}&key=${apiKey}`;
+    const res = await fetch(searchUrl);
+    if (!res.ok) throw new Error(`YouTube API error: ${res.status} ${res.statusText}`);
+
+    const data = await res.json();
+    const items: any[] = data.items || [];
+    if (items.length === 0) return { videos: [], error: `No videos found for topic: "${topic}"` };
+
+    const results = [] as Array<{
+      videoId: string;
+      title: string;
+      channelTitle: string;
+      publishedAt: string;
+      url: string;
+      summary: string;
+      transcriptLength: number;
+    }>;
+
+    for (const v of items) {
+      const videoId = v.id?.videoId as string;
+      const url = `https://www.youtube.com/watch?v=${videoId}`;
+      const title = v.snippet?.title || "";
+      const channelTitle = v.snippet?.channelTitle || "";
+      const publishedAt = v.snippet?.publishedAt || "";
+      const description = v.snippet?.description || "";
+
+      const summary = await summarizeWithGroqFromMetadata(title, description, url);
+      results.push({
+        videoId,
+        title,
+        channelTitle,
+        publishedAt,
+        url,
+        summary,
+        transcriptLength: 0
+      });
     }
 
-    return { videos: videoSummaries };
-    
+    return { videos: results };
   } catch (err: any) {
-    return { 
-      videos: [], 
-      error: `Failed to search YouTube: ${err?.message || String(err)}` 
-    };
+    return { videos: [], error: `Failed to search YouTube: ${err?.message || String(err)}` };
   }
 }
 
-function createSummary(text: string, title: string): string {
-  // Simple extractive summarization - take first few sentences and key phrases
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 10);
-  const words = text.toLowerCase().split(/\s+/);
-  
-  // Count word frequency (excluding common words)
-  const commonWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them']);
-  
-  const wordFreq: Record<string, number> = {};
-  words.forEach(word => {
-    const cleanWord = word.replace(/[^\w]/g, '');
-    if (cleanWord.length > 3 && !commonWords.has(cleanWord)) {
-      wordFreq[cleanWord] = (wordFreq[cleanWord] || 0) + 1;
+async function fetchBasicYouTubeMetadata(url: string): Promise<{ title: string; channelTitle: string; publishedAt: string; description: string; }>{
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  const videoId = new URL(url).searchParams.get("v");
+
+  if (apiKey && videoId) {
+    const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${apiKey}`;
+    const res = await fetch(apiUrl);
+    if (res.ok) {
+      const data = await res.json();
+      const item = data.items?.[0]?.snippet || {};
+      return {
+        title: item.title || "",
+        channelTitle: item.channelTitle || "",
+        publishedAt: item.publishedAt || "",
+        description: item.description || ""
+      };
     }
-  });
-  
-  // Get top keywords
-  const topKeywords = Object.entries(wordFreq)
-    .sort(([,a], [,b]) => b - a)
-    .slice(0, 5)
-    .map(([word]) => word);
-  
-  // Take first 2-3 sentences as summary
-  const summarySentences = sentences.slice(0, 3);
-  const summary = summarySentences.join('. ').trim();
-  
-  // Add keywords if summary is too short
-  if (summary.length < 100 && topKeywords.length > 0) {
-    return `${summary} Key topics: ${topKeywords.join(', ')}.`;
   }
-  
-  return summary || "Summary not available.";
+
+  const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+  try {
+    const o = await fetch(oembedUrl);
+    if (o.ok) {
+      const data = await o.json();
+      return {
+        title: data.title || "",
+        channelTitle: data.author_name || "",
+        publishedAt: "",
+        description: ""
+      };
+    }
+  } catch {}
+
+  return { title: "", channelTitle: "", publishedAt: "", description: "" };
+}
+
+async function summarizeWithGroqFromMetadata(title: string, description: string, url: string): Promise<string> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return "Missing GROQ_API_KEY. Please set it.";
+
+  const groq = new Groq({ apiKey });
+  const model = "llama-3.3-70b-versatile";
+
+  const prompt = [
+    `Summarize this YouTube video. If the description is short, infer likely key points.`,
+    `Return a concise 6-10 bullet summary with actionable insights.`,
+    ``,
+    `Title: ${title || "(unknown)"}`,
+    `URL: ${url}`,
+    `Description: ${description || "(no description provided)"}`
+  ].join("\n");
+
+  const completion = await groq.chat.completions.create({
+    model,
+    messages: [
+      { role: "system", content: "You are an expert YouTube content summarizer." },
+      { role: "user", content: prompt }
+    ],
+    temperature: 0.3,
+    max_tokens: 600,
+  });
+
+  const out = completion.choices?.[0]?.message?.content?.trim();
+  return out || "Summary not available.";
 }

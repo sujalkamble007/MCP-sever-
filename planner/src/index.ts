@@ -22,7 +22,7 @@ const server = new McpServer({
   capabilities: {
     resources: {},
     tools: {
-      youtube: youtubeSchema.shape,
+      youtube: (youtubeSchema as any).shape ?? { topic: z.string().optional(), url: z.string().url().optional(), maxVideos: z.number().optional() },
       webSearch: webSearchSchema.shape,
     },
   },
@@ -49,7 +49,7 @@ server.tool(
   });
   
   // youtube_research
-  server.tool("youtube_research","Searches and summarizes YouTube videos by topic", youtubeSchema.shape as any, async (args:any, _extra)=>{
+  server.tool("youtube_research","Searches and summarizes YouTube videos by topic", ((youtubeSchema as any).shape ?? { topic: z.string().optional(), url: z.string().url().optional(), maxVideos: z.number().optional() }) as any, async (args:any, _extra)=>{
     const parsed = youtubeSchema.parse(args);
     const r = await youtubeResearch(parsed);
     
@@ -67,7 +67,7 @@ server.tool(
       `Channel: ${video.channelTitle}`,
       `Published: ${new Date(video.publishedAt).toLocaleDateString()}`,
       `URL: ${video.url}`,
-      `Transcript Length: ${video.transcriptLength} characters`,
+      // `Transcript Length: ${video.transcriptLength} characters`,
       `Summary:`,
       video.summary,
       `---`
