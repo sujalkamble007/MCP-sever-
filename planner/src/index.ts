@@ -85,19 +85,19 @@ server.tool("wikipedia_search","Extracts summaries from Wikipedia pages", wikipe
     return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
   });
   
-  // document_rag
-  server.tool("document_rag","Retrieves content from document vector DB", ragSchema.shape as any, async (args:any, _extra)=>{
-    const parsed = ragSchema.parse(args);
-    const r = await documentRag(parsed);
-    return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
-  });
+  // // document_rag
+  // server.tool("document_rag","Retrieves content from document vector DB", ragSchema.shape as any, async (args:any, _extra)=>{
+  //   const parsed = ragSchema.parse(args);
+  //   const r = await documentRag(parsed);
+  //   return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
+  // });
   
-  // synthesize_results
-  server.tool("synthesize_results","Combines outputs into a final answer", synthSchema.shape as any, async (args:any, _extra)=>{
-    const parsed = synthSchema.parse(args);
-    const r = await synthesizeResults(parsed);
-    return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
-  });
+  // // synthesize_results
+  // server.tool("synthesize_results","Combines outputs into a final answer", synthSchema.shape as any, async (args:any, _extra)=>{
+  //   const parsed = synthSchema.parse(args);
+  //   const r = await synthesizeResults(parsed);
+  //   return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
+  // });
 
 
 
