@@ -1,0 +1,8 @@
+.env
+notes.txt
+node_modules
+build
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local

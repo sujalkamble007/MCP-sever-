@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "Planner": {
+      "command": "node",
+      "args": [
+        "/Users/sujalkamble/Desktop/mcpp/planner/build/index.js"
+      ]
+    }
+  }
+}
