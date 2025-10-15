@@ -4,16 +4,15 @@ import { z } from "zod";
 import { youtubeResearch, youtubeSchema } from "./tools/youtube.js";
 import { webSearch, webSearchSchema } from "./tools/webSearch.js";
 import { wikipediaSearch, wikipediaSchema } from "./tools/wikipedia.js";
-import { documentRag, ragSchema } from "./tools/documentRag.js";
-import { synthesizeResults, synthSchema } from "./tools/synthesizer.js";
+// Removed unused endpoints: documentRag, synthesize_results
 import { httpJson } from "./utils/http.js";
 import { WebSearchItem, YouTubeTranscriptItem, WikiSummary, RagHit, ToolTextBlock } from "./utils/types.js";
 import { formatWebResults, formatYouTubeTranscript, formatWikiSummary, formatRagHits } from "./utils/format.js";
 import { researchPlanner } from "./agents/researchPlanner.js";
 
 
-const NWS_API_BASE = "https://api.weather.gov";
-const USER_AGENT = "weather-app/1.0";
+// const NWS_API_BASE = "https://api.weather.gov";
+// const USER_AGENT = "weather-app/1.0";
 
 // Create server instance
 const server = new McpServer({
@@ -24,6 +23,7 @@ const server = new McpServer({
     tools: {
       youtube: (youtubeSchema as any).shape ?? { topic: z.string().optional(), url: z.string().url().optional(), maxVideos: z.number().optional() },
       webSearch: webSearchSchema.shape,
+      wikipedia: wikipediaSchema.shape as any,
     },
   },
 });
@@ -33,7 +33,7 @@ const server = new McpServer({
 server.tool(
     "research_planner",
     "Orchestrates sub-agents based on intent",
-    { query: z.string().min(3), sources: z.array(z.enum(["web","youtube","wikipedia","rag"])).optional() },
+    { query: z.string().min(3), sources: z.array(z.enum(["web","youtube","wikipedia"])).optional() },
     async ({ query, sources }, _extra) => {
       const res = await researchPlanner({ query, sources });
       return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }] };
@@ -85,22 +85,6 @@ server.tool("wikipedia_search","Extracts summaries from Wikipedia pages", wikipe
     return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
   });
   
-  // // document_rag
-  // server.tool("document_rag","Retrieves content from document vector DB", ragSchema.shape as any, async (args:any, _extra)=>{
-  //   const parsed = ragSchema.parse(args);
-  //   const r = await documentRag(parsed);
-  //   return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
-  // });
-  
-  // // synthesize_results
-  // server.tool("synthesize_results","Combines outputs into a final answer", synthSchema.shape as any, async (args:any, _extra)=>{
-  //   const parsed = synthSchema.parse(args);
-  //   const r = await synthesizeResults(parsed);
-  //   return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
-  // });
-
-
-
   async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
